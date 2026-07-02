@@ -72,6 +72,34 @@ final class Address extends EmbeddableModel
 
 Add the cast to the parent's `casts()` method. **No trait is required.**
 
+### Zero-config form
+
+```php
+use Illuminate\Database\Eloquent\Model;
+use Kyzegs\EloquentEmbeddables\Casts\EmbeddableCast;
+
+final class User extends Model
+{
+    protected function casts(): array
+    {
+        return [
+            'address' => EmbeddableCast::using(Address::class, nullable: true),
+        ];
+    }
+}
+```
+
+The prefix defaults to the cast key + `_` (`address_`), and the columns are discovered by matching that prefix against the parent table's real columns (one cached schema query per table). No columns match, or no connection is available? The map falls back to the embeddable's fillable attributes and cast keys, prefixed.
+
+The full resolution order, most explicit first:
+
+1. An explicit `columns` map.
+2. Explicit `attributes`, prefixed.
+3. Schema discovery: parent table columns matching the prefix.
+4. Fallback: the embeddable's fillable attributes + cast keys, prefixed.
+
+If none of these produce a map, an `InvalidArgumentException` explains exactly what was tried. Combining `columns` with `prefix`/`attributes` throws as well — the forms are mutually exclusive.
+
 ### Prefix form
 
 ```php
@@ -162,6 +190,12 @@ $user->address->city = 'Amsterdam';
 $user->save();   // updates users.address_city
 ```
 
+**Compare as value objects** — `equals()` is true for the same concrete class with identical attributes, regardless of order:
+
+```php
+$user->address->equals(new Address(['city' => 'Rotterdam', /* … */]));
+```
+
 ## Nullable embeddables
 
 With `nullable: true`:
@@ -235,34 +269,36 @@ For the concrete class and correct nullability, register the shipped model hook 
 
 The `|null` is only added when the cast is `nullable`. (The write side also accepts an attribute array or `null`; the generated single-type `@property` favors the concrete class.)
 
-Embeddable classes themselves have no table, so `ide-helper:models` cannot introspect them — annotate them with `@property` docblocks by hand:
+The hook also types the embeddable classes themselves. An embeddable has no table to introspect, so the hook finds a parent model embedding it (scanning ide-helper's `model_locations`), maps each attribute to its backing parent column, and derives the type from the embeddable's own cast or the column's schema type:
 
 ```php
 /**
  * @property string|null $street
  * @property string|null $city
+ * @property bool|null $verified
  */
 class Address extends EmbeddableModel
 ```
 
+Make sure both the parent models and the embeddable classes live in directories covered by `model_locations` in `config/ide-helper.php`. When several parents embed the same class, the first one found supplies the column types.
+
 ## What is *not* supported
 
-An embeddable is not a full Eloquent model. These throw an `EmbeddableException`:
+An embeddable is not a full Eloquent model. Every persistence method (`save`, `saveOrFail`, `update`, `delete`, `forceDelete`, `push`, `refresh`, `fresh`, `touch`, `increment`, `decrement` and their quiet variants) and every relationship method (`hasOne`, `hasMany`, `hasOneThrough`, `hasManyThrough`, `through`, `belongsTo`, `belongsToMany`, `morphOne`, `morphMany`, `morphTo`, `morphToMany`, `morphedByMany`) throws an `EmbeddableException`:
 
 ```php
 $user->address->save();
 $user->address->delete();
-$user->address->refresh();
-$user->address->newQuery();
 $user->address->hasMany(...);
-$user->address->belongsTo(...);
 ```
 
 > Embeddables are persisted through their parent Eloquent model. Call save() on the parent model instead.
 
+> Embeddables do not participate in relationships. Define the relationship on the parent Eloquent model instead.
+
 ## How it works
 
-`EmbeddableCast::using()` returns an encoded [`Castable`](https://laravel.com/docs/eloquent-mutators#castables) definition, so Laravel's native cast resolver builds the configured cast. On the cast:
+`EmbeddableCast::using()` returns an encoded [`Castable`](https://laravel.com/docs/eloquent-mutators#castables) definition, so Laravel's native cast resolver builds the configured cast. The attribute => column map is resolved lazily on first use, following the resolution order above. On the cast:
 
 1. **`get()`** reads the mapped parent columns and hydrates an embeddable (its own casts apply).
 2. **`set()`** flattens an array / instance / `null` back into the mapped columns.

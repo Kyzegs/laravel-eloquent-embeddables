@@ -31,7 +31,7 @@ trait HasEmbeddables
                 $this->appends[] = $key;
             }
 
-            $this->makeHidden(EmbeddableCast::columnsFor($cast));
+            $this->makeHidden(EmbeddableCast::columnsFor($cast, $key, $this));
         }
     }
 }

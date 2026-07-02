@@ -10,6 +10,7 @@ use Illuminate\Contracts\Database\Eloquent\SerializesCastableAttributes;
 use Illuminate\Database\Eloquent\Model;
 use InvalidArgumentException;
 use Kyzegs\EloquentEmbeddables\EmbeddableModel;
+use Throwable;
 
 /**
  * Casts a group of normal parent columns into a rich embeddable object.
@@ -26,6 +27,17 @@ use Kyzegs\EloquentEmbeddables\EmbeddableModel;
 class EmbeddableCast implements Castable, CastsAttributes, SerializesCastableAttributes
 {
     /**
+     * Column listings per connection + table, so zero-config discovery costs
+     * at most one schema query per table per process.
+     *
+     * @var array<string, list<string>>
+     */
+    protected static array $schemaColumns = [];
+
+    /** @var array<string, string>|null */
+    protected ?array $resolvedMap = null;
+
+    /**
      * @param  class-string<EmbeddableModel>  $embeddable
      * @param  list<string>  $attributes
      * @param  array<string, string>  $columns
@@ -41,8 +53,11 @@ class EmbeddableCast implements Castable, CastsAttributes, SerializesCastableAtt
     /**
      * Build the cast definition for a parent model's casts() array.
      *
-     * Either pass a `prefix` plus the list of `attributes`, or an explicit
-     * `columns` map of `embeddable attribute => parent column`.
+     * All arguments besides the class are optional. Without them, the column
+     * map is resolved lazily per {@see self::resolveMap()}: the prefix
+     * defaults to the cast key + '_', and the attributes are discovered from
+     * the parent table's schema (falling back to the embeddable's fillable
+     * attributes and cast keys).
      *
      * @param  class-string<EmbeddableModel>  $class
      * @param  list<string>  $attributes
@@ -55,6 +70,13 @@ class EmbeddableCast implements Castable, CastsAttributes, SerializesCastableAtt
         array $columns = [],
         bool $nullable = false,
     ): string {
+        if ($columns !== [] && ($prefix !== null || $attributes !== [])) {
+            throw new InvalidArgumentException(sprintf(
+                'The [%s] embeddable cast accepts either a prefix/attributes or an explicit columns map, not both.',
+                $class,
+            ));
+        }
+
         return static::class.':'.static::encode([
             'embeddable' => $class,
             'prefix' => $prefix,
@@ -66,9 +88,8 @@ class EmbeddableCast implements Castable, CastsAttributes, SerializesCastableAtt
 
     /**
      * @param  array<int, string>  $arguments
-     * @return CastsAttributes<EmbeddableModel|null, EmbeddableModel|array<string, mixed>|null>
      */
-    public static function castUsing(array $arguments): CastsAttributes
+    public static function castUsing(array $arguments): static
     {
         $config = static::decode($arguments[0]);
 
@@ -89,7 +110,7 @@ class EmbeddableCast implements Castable, CastsAttributes, SerializesCastableAtt
         $raw = [];
         $allNull = true;
 
-        foreach ($this->map() as $attribute => $column) {
+        foreach ($this->map($model, $key) as $attribute => $column) {
             $raw[$attribute] = $attributes[$column] ?? null;
 
             if (! is_null($raw[$attribute])) {
@@ -112,15 +133,17 @@ class EmbeddableCast implements Castable, CastsAttributes, SerializesCastableAtt
      */
     public function set(Model $model, string $key, mixed $value, array $attributes): array
     {
+        $map = $this->map($model, $key);
+
         if (is_null($value)) {
-            return array_fill_keys(array_values($this->map()), null);
+            return array_fill_keys(array_values($map), null);
         }
 
         $raw = $this->toEmbeddable($value)->getAttributes();
 
         $columns = [];
 
-        foreach ($this->map() as $attribute => $column) {
+        foreach ($map as $attribute => $column) {
             $columns[$column] = $raw[$attribute] ?? null;
         }
 
@@ -143,8 +166,17 @@ class EmbeddableCast implements Castable, CastsAttributes, SerializesCastableAtt
      */
     public static function configFor(string $cast): array
     {
-        /** @var array{embeddable: class-string<EmbeddableModel>, prefix: string|null, attributes: list<string>, columns: array<string, string>, nullable: bool} */
         return static::decode(explode(':', $cast, 2)[1]);
+    }
+
+    /**
+     * Resolve the attribute => parent column map for an encoded cast definition.
+     *
+     * @return array<string, string>
+     */
+    public static function mapFor(string $cast, string $key, Model $model): array
+    {
+        return static::castUsing([explode(':', $cast, 2)[1]])->map($model, $key);
     }
 
     /**
@@ -152,36 +184,111 @@ class EmbeddableCast implements Castable, CastsAttributes, SerializesCastableAtt
      *
      * @return list<string>
      */
-    public static function columnsFor(string $cast): array
+    public static function columnsFor(string $cast, string $key, Model $model): array
     {
-        $config = static::configFor($cast);
-
-        if (! empty($config['columns'])) {
-            return array_values($config['columns']);
-        }
-
-        return array_map(
-            static fn (string $attribute): string => $config['prefix'].$attribute,
-            $config['attributes'],
-        );
+        return array_values(static::mapFor($cast, $key, $model));
     }
 
     /**
      * @return array<string, string> Map of embeddable attribute => parent column.
      */
-    protected function map(): array
+    protected function map(Model $model, string $key): array
     {
-        if (! empty($this->columns)) {
+        return $this->resolvedMap ??= $this->resolveMap($model, $key);
+    }
+
+    /**
+     * Resolve the column map, most explicit configuration first:
+     *
+     * 1. An explicit `columns` map.
+     * 2. Explicit `attributes`, prefixed.
+     * 3. The parent table's columns matching the prefix (schema discovery).
+     * 4. The embeddable's fillable attributes and cast keys, prefixed.
+     *
+     * The prefix defaults to the cast key + '_'.
+     *
+     * @return array<string, string>
+     */
+    protected function resolveMap(Model $model, string $key): array
+    {
+        if ($this->columns !== []) {
             return $this->columns;
         }
 
+        $prefix = $this->prefix ?? $key.'_';
+
+        if ($this->attributes !== []) {
+            return static::prefixed($this->attributes, $prefix);
+        }
+
+        $discovered = [];
+
+        foreach (static::tableColumns($model) as $column) {
+            if (str_starts_with($column, $prefix) && strlen($column) > strlen($prefix)) {
+                $discovered[substr($column, strlen($prefix))] = $column;
+            }
+        }
+
+        if ($discovered !== []) {
+            return $discovered;
+        }
+
+        $embeddable = new $this->embeddable;
+
+        $attributes = array_values(array_unique(array_merge(
+            $embeddable->getFillable(),
+            array_keys($embeddable->getCasts()),
+        )));
+
+        if ($attributes !== []) {
+            return static::prefixed($attributes, $prefix);
+        }
+
+        throw new InvalidArgumentException(sprintf(
+            'Unable to resolve the column map for the [%s] embeddable on [%s.%s]: no attributes or columns were configured, no [%s*] columns exist on the [%s] table, and the embeddable declares no fillable attributes or casts.',
+            $this->embeddable,
+            $model::class,
+            $key,
+            $prefix,
+            $model->getTable(),
+        ));
+    }
+
+    /**
+     * @param  list<string>  $attributes
+     * @return array<string, string>
+     */
+    protected static function prefixed(array $attributes, string $prefix): array
+    {
         $map = [];
 
-        foreach ($this->attributes as $attribute) {
-            $map[$attribute] = $this->prefix.$attribute;
+        foreach ($attributes as $attribute) {
+            $map[$attribute] = $prefix.$attribute;
         }
 
         return $map;
+    }
+
+    /**
+     * @return list<string>
+     */
+    protected static function tableColumns(Model $model): array
+    {
+        $key = ($model->getConnectionName() ?? 'default').'.'.$model->getTable();
+
+        if (! array_key_exists($key, static::$schemaColumns)) {
+            try {
+                static::$schemaColumns[$key] = $model->getConnection()
+                    ->getSchemaBuilder()
+                    ->getColumnListing($model->getTable());
+            } catch (Throwable) {
+                // No usable connection (e.g. constructing models offline);
+                // resolveMap() falls back to the embeddable's own attributes.
+                static::$schemaColumns[$key] = [];
+            }
+        }
+
+        return static::$schemaColumns[$key];
     }
 
     protected function toEmbeddable(mixed $value): EmbeddableModel
@@ -217,10 +324,11 @@ class EmbeddableCast implements Castable, CastsAttributes, SerializesCastableAtt
     }
 
     /**
-     * @return array<string, mixed>
+     * @return array{embeddable: class-string<EmbeddableModel>, prefix: string|null, attributes: list<string>, columns: array<string, string>, nullable: bool}
      */
     protected static function decode(string $payload): array
     {
+        /** @var array{embeddable: class-string<EmbeddableModel>, prefix: string|null, attributes: list<string>, columns: array<string, string>, nullable: bool} */
         return json_decode(base64_decode($payload), true, 512, JSON_THROW_ON_ERROR);
     }
 }

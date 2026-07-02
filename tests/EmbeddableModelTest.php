@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Kyzegs\EloquentEmbeddables\Tests;
 
+use Kyzegs\EloquentEmbeddables\EmbeddableModel;
 use Kyzegs\EloquentEmbeddables\Exceptions\EmbeddableException;
 use Kyzegs\EloquentEmbeddables\Tests\Fixtures\Address;
 use Kyzegs\EloquentEmbeddables\Tests\Fixtures\User;
@@ -50,8 +51,8 @@ class EmbeddableModelTest extends TestCase
      * @param  array<int, mixed>  $arguments
      */
     #[Test]
-    #[DataProvider('forbiddenMethods')]
-    public function it_forbids_persistence_and_relationship_methods(string $method, array $arguments): void
+    #[DataProvider('persistenceMethods')]
+    public function it_forbids_persistence_methods(string $method, array $arguments): void
     {
         $address = new Address(['city' => 'Rotterdam']);
 
@@ -67,25 +68,90 @@ class EmbeddableModelTest extends TestCase
     }
 
     /**
+     * @param  array<int, mixed>  $arguments
+     */
+    #[Test]
+    #[DataProvider('relationshipMethods')]
+    public function it_forbids_relationship_methods(string $method, array $arguments): void
+    {
+        $address = new Address(['city' => 'Rotterdam']);
+
+        try {
+            $address->{$method}(...$arguments);
+            $this->fail("Expected {$method}() to throw an EmbeddableException.");
+        } catch (EmbeddableException $e) {
+            $this->assertSame(
+                'Embeddables do not participate in relationships. Define the relationship on the parent Eloquent model instead.',
+                $e->getMessage(),
+            );
+        }
+    }
+
+    /**
      * @return iterable<string, array{0: string, 1: array<int, mixed>}>
      */
-    public static function forbiddenMethods(): iterable
+    public static function persistenceMethods(): iterable
     {
         yield 'save' => ['save', []];
+        yield 'saveOrFail' => ['saveOrFail', []];
         yield 'update' => ['update', [['city' => 'X']]];
         yield 'delete' => ['delete', []];
         yield 'forceDelete' => ['forceDelete', []];
         yield 'refresh' => ['refresh', []];
         yield 'fresh' => ['fresh', []];
         yield 'push' => ['push', []];
-        yield 'newQuery' => ['newQuery', []];
-        yield 'newModelQuery' => ['newModelQuery', []];
+        yield 'touch' => ['touch', []];
+        yield 'touchQuietly' => ['touchQuietly', []];
+        yield 'increment' => ['increment', ['verified']];
+        yield 'decrement' => ['decrement', ['verified']];
+        yield 'incrementQuietly' => ['incrementQuietly', ['verified']];
+        yield 'decrementQuietly' => ['decrementQuietly', ['verified']];
+    }
+
+    /**
+     * @return iterable<string, array{0: string, 1: array<int, mixed>}>
+     */
+    public static function relationshipMethods(): iterable
+    {
         yield 'hasOne' => ['hasOne', [User::class]];
         yield 'hasMany' => ['hasMany', [User::class]];
+        yield 'hasOneThrough' => ['hasOneThrough', [User::class, User::class]];
+        yield 'hasManyThrough' => ['hasManyThrough', [User::class, User::class]];
+        yield 'through' => ['through', ['users']];
         yield 'belongsTo' => ['belongsTo', [User::class]];
         yield 'belongsToMany' => ['belongsToMany', [User::class]];
         yield 'morphOne' => ['morphOne', [User::class, 'parent']];
         yield 'morphMany' => ['morphMany', [User::class, 'parent']];
         yield 'morphTo' => ['morphTo', []];
+        yield 'morphToMany' => ['morphToMany', [User::class, 'parent']];
+        yield 'morphedByMany' => ['morphedByMany', [User::class, 'parent']];
+    }
+
+    #[Test]
+    public function it_compares_value_objects_with_equals(): void
+    {
+        $a = new Address(['street' => 'Coolsingel 1', 'city' => 'Rotterdam']);
+        $b = new Address(['city' => 'Rotterdam', 'street' => 'Coolsingel 1']);
+        $c = new Address(['street' => 'Coolsingel 1', 'city' => 'Amsterdam']);
+
+        $this->assertTrue($a->equals($b));
+        $this->assertTrue($b->equals($a));
+        $this->assertFalse($a->equals($c));
+        $this->assertFalse($a->equals(null));
+    }
+
+    #[Test]
+    public function equals_requires_the_same_concrete_class(): void
+    {
+        $address = new Address(['city' => 'Rotterdam']);
+
+        $other = new class extends EmbeddableModel
+        {
+            protected $fillable = ['city'];
+        };
+
+        $other->fill(['city' => 'Rotterdam']);
+
+        $this->assertFalse($address->equals($other));
     }
 }

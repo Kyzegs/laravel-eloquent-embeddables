@@ -4,11 +4,15 @@ declare(strict_types=1);
 
 namespace Kyzegs\EloquentEmbeddables\Tests;
 
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
+use InvalidArgumentException;
 use Kyzegs\EloquentEmbeddables\Casts\EmbeddableCast;
+use Kyzegs\EloquentEmbeddables\EmbeddableModel;
 use Kyzegs\EloquentEmbeddables\Tests\Fixtures\Address;
 use Kyzegs\EloquentEmbeddables\Tests\Fixtures\User;
 use Kyzegs\EloquentEmbeddables\Tests\Fixtures\UserWithColumns;
+use Kyzegs\EloquentEmbeddables\Tests\Fixtures\UserZeroConfig;
 use PHPUnit\Framework\Attributes\Test;
 
 class EmbeddableCastTest extends TestCase
@@ -206,6 +210,111 @@ class EmbeddableCastTest extends TestCase
         $this->assertSame(['street', 'city'], $config['attributes']);
         $this->assertSame([], $config['columns']);
         $this->assertTrue($config['nullable']);
+    }
+
+    #[Test]
+    public function it_exposes_the_attribute_to_column_map(): void
+    {
+        $prefixed = EmbeddableCast::using(Address::class, prefix: 'address_', attributes: ['street', 'city']);
+
+        $this->assertSame([
+            'street' => 'address_street',
+            'city' => 'address_city',
+        ], EmbeddableCast::mapFor($prefixed, 'address', new User));
+
+        $mapped = EmbeddableCast::using(Address::class, columns: ['street' => 'street_line']);
+
+        $this->assertSame(['street' => 'street_line'], EmbeddableCast::mapFor($mapped, 'address', new User));
+    }
+
+    #[Test]
+    public function it_discovers_columns_from_the_schema_with_zero_config(): void
+    {
+        $this->seedAddress(['address_verified' => 1]);
+
+        $user = UserZeroConfig::firstOrFail();
+
+        $this->assertInstanceOf(Address::class, $user->address);
+        $this->assertSame('Coolsingel 1', $user->address->street);
+        $this->assertSame('Rotterdam', $user->address->city);
+        $this->assertTrue($user->address->verified);
+
+        $user->address->city = 'Amsterdam';
+        $user->save();
+
+        $this->assertSame('Amsterdam', DB::table('users')->where('id', $user->id)->value('address_city'));
+    }
+
+    #[Test]
+    public function it_writes_and_serializes_zero_config_embeddables(): void
+    {
+        $user = UserZeroConfig::create(['name' => 'Sebastiaan']);
+
+        $user->address = ['street' => 'Coolsingel 1', 'city' => 'Rotterdam'];
+        $user->save();
+
+        $this->assertSame('Rotterdam', DB::table('users')->where('id', $user->id)->value('address_city'));
+
+        $array = UserZeroConfig::firstOrFail()->toArray();
+
+        $this->assertSame('Rotterdam', $array['address']['city']);
+        $this->assertArrayNotHasKey('address_city', $array);
+    }
+
+    #[Test]
+    public function it_maps_zero_config_casts_from_the_schema(): void
+    {
+        $cast = EmbeddableCast::using(Address::class, nullable: true);
+
+        $this->assertSame([
+            'street' => 'address_street',
+            'city' => 'address_city',
+            'postal_code' => 'address_postal_code',
+            'country' => 'address_country',
+            'verified' => 'address_verified',
+        ], EmbeddableCast::mapFor($cast, 'address', new UserZeroConfig));
+    }
+
+    #[Test]
+    public function it_falls_back_to_fillable_and_casts_when_the_schema_has_no_matches(): void
+    {
+        $cast = EmbeddableCast::using(Address::class, prefix: 'addr_');
+
+        $this->assertSame([
+            'street' => 'addr_street',
+            'city' => 'addr_city',
+            'postal_code' => 'addr_postal_code',
+            'country' => 'addr_country',
+            'verified' => 'addr_verified',
+        ], EmbeddableCast::mapFor($cast, 'address', new User));
+    }
+
+    #[Test]
+    public function it_rejects_combining_columns_with_the_prefix_form(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        EmbeddableCast::using(
+            Address::class,
+            prefix: 'address_',
+            columns: ['street' => 'address_street'],
+        );
+    }
+
+    #[Test]
+    public function it_rejects_an_unresolvable_column_map(): void
+    {
+        $bare = new class extends EmbeddableModel {};
+
+        $cast = EmbeddableCast::using($bare::class, prefix: 'nope_');
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Unable to resolve the column map');
+
+        EmbeddableCast::mapFor($cast, 'address', new class extends Model
+        {
+            protected $table = 'users';
+        });
     }
 
     /**

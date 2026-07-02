@@ -148,6 +148,23 @@ class EmbeddablesModelHookTest extends TestCase
     }
 
     #[Test]
+    public function it_merges_typing_from_all_embedding_parents(): void
+    {
+        // A parent with a partial column map is scanned first; the remaining
+        // attributes must still be typed from the other embedding parents.
+        config()->set('ide-helper.model_locations', [
+            __DIR__.'/Fixtures/Partial',
+            __DIR__.'/Fixtures',
+        ]);
+
+        $properties = $this->runHook(new Address);
+
+        $this->assertSame('string|null', $properties['street']['type'] ?? null);
+        $this->assertSame('string|null', $properties['city']['type'] ?? null);
+        $this->assertSame('bool|null', $properties['verified']['type'] ?? null);
+    }
+
+    #[Test]
     public function it_leaves_embeddables_without_a_discoverable_parent_untyped(): void
     {
         config()->set('ide-helper.model_locations', [__DIR__.'/Fixtures']);

@@ -280,7 +280,7 @@ The hook also types the embeddable classes themselves. An embeddable has no tabl
 class Address extends EmbeddableModel
 ```
 
-Make sure both the parent models and the embeddable classes live in directories covered by `model_locations` in `config/ide-helper.php`. When several parents embed the same class, the first one found supplies the column types.
+Make sure both the parent models and the embeddable classes live in directories covered by `model_locations` in `config/ide-helper.php`. When several parents embed the same class, their column maps are merged; the first parent to supply an attribute wins.
 
 ## What is *not* supported
 

@@ -24,12 +24,13 @@ use Throwable;
  * class and the cast's actual nullability.
  *
  * On embeddable models: an embeddable has no table for ide-helper to
- * introspect, so this hook locates a parent model embedding it (scanning the
- * same `model_locations` ide-helper scans) and lets ide-helper's own machinery
- * do the typing: {@see ModelsCommand::getPropertiesFromTable()} types the
- * parent's columns, the results are re-keyed onto the embeddable's attributes,
- * and {@see ModelsCommand::castPropertiesType()} applies the embeddable's own
- * casts on top.
+ * introspect, so this hook locates the parent models embedding it (scanning
+ * the same `model_locations` ide-helper scans) and lets ide-helper's own
+ * machinery do the typing: {@see ModelsCommand::getPropertiesFromTable()}
+ * types each parent's columns, the results are re-keyed onto the embeddable's
+ * attributes, and {@see ModelsCommand::castPropertiesType()} applies the
+ * embeddable's own casts on top. Maps from all embedding parents are merged;
+ * the first parent to supply an attribute wins.
  *
  * Register it in config/ide-helper.php under `model_hooks`.
  */
@@ -56,50 +57,55 @@ class EmbeddablesModelHook implements ModelHookInterface
 
     protected function typeEmbeddableAttributes(ModelsCommand $command, EmbeddableModel $model): void
     {
-        $embedding = $this->findEmbedding($command, $model::class);
-
-        if ($embedding === null) {
-            return;
-        }
-
-        [$parent, $map] = $embedding;
-
         $properties = new ReflectionProperty($command, 'properties');
         $methods = new ReflectionProperty($command, 'methods');
         $nullableColumns = new ReflectionProperty($command, 'nullableColumns');
 
-        $propertiesSnapshot = $properties->getValue($command);
-        $methodsSnapshot = $methods->getValue($command);
-
         /** @var array<string, bool> $nullability */
         $nullability = $nullableColumns->getValue($command);
 
-        // Let ide-helper type the parent's columns with its own driver-aware
-        // schema logic, then take those results and roll the command back.
-        $command->getPropertiesFromTable($parent);
+        $typed = [];
 
-        /** @var array<string, array{type: string|null, read: bool, write: bool, comment: string}> $columnProperties */
-        $columnProperties = $properties->getValue($command);
+        foreach ($this->findEmbeddings($command, $model::class) as [$parent, $map]) {
+            $propertiesSnapshot = $properties->getValue($command);
+            $methodsSnapshot = $methods->getValue($command);
+            $nullableSnapshot = $nullableColumns->getValue($command);
 
-        /** @var array<string, bool> $columnNullability */
-        $columnNullability = $nullableColumns->getValue($command);
+            // Let ide-helper type the parent's columns with its own
+            // driver-aware schema logic, then roll the command back.
+            $command->getPropertiesFromTable($parent);
 
-        $properties->setValue($command, $propertiesSnapshot);
-        $methods->setValue($command, $methodsSnapshot);
+            /** @var array<string, array{type: string|null, read: bool, write: bool, comment: string}> $columnProperties */
+            $columnProperties = $properties->getValue($command);
 
-        // Re-key the parent's typed columns to the embeddable's attributes.
-        foreach ($map as $attribute => $column) {
-            if (! isset($columnProperties[$column])) {
-                continue;
+            /** @var array<string, bool> $columnNullability */
+            $columnNullability = $nullableColumns->getValue($command);
+
+            $properties->setValue($command, $propertiesSnapshot);
+            $methods->setValue($command, $methodsSnapshot);
+            $nullableColumns->setValue($command, $nullableSnapshot);
+
+            // Re-key the parent's typed columns to the embeddable's
+            // attributes; the first parent to supply an attribute wins.
+            foreach ($map as $attribute => $column) {
+                if (isset($typed[$attribute]) || ! isset($columnProperties[$column])) {
+                    continue;
+                }
+
+                $typed[$attribute] = true;
+
+                $property = $columnProperties[$column];
+
+                $command->setProperty($attribute, $property['type'], true, true, $property['comment']);
+
+                if ($columnNullability[$column] ?? false) {
+                    $nullability[$attribute] = true;
+                }
             }
+        }
 
-            $property = $columnProperties[$column];
-
-            $command->setProperty($attribute, $property['type'], true, true, $property['comment']);
-
-            if ($columnNullability[$column] ?? false) {
-                $nullability[$attribute] = true;
-            }
+        if ($typed === []) {
+            return;
         }
 
         $nullableColumns->setValue($command, $nullability);
@@ -109,15 +115,23 @@ class EmbeddablesModelHook implements ModelHookInterface
     }
 
     /**
-     * Locate a parent model embedding the given class by scanning the model
-     * locations ide-helper itself scans.
+     * Locate every parent model embedding the given class by scanning the
+     * model locations ide-helper itself scans.
      *
      * @param  class-string<EmbeddableModel>  $embeddable
-     * @return array{0: Model, 1: array<string, string>}|null Parent instance + attribute => column map.
+     * @return iterable<array{0: Model, 1: array<string, string>}> Parent instance + attribute => column map.
      */
-    protected function findEmbedding(ModelsCommand $command, string $embeddable): ?array
+    protected function findEmbeddings(ModelsCommand $command, string $embeddable): iterable
     {
+        $seen = [];
+
         foreach ($this->modelClasses($command) as $class) {
+            if (isset($seen[$class])) {
+                continue;
+            }
+
+            $seen[$class] = true;
+
             try {
                 $reflection = new ReflectionClass($class);
 
@@ -138,15 +152,13 @@ class EmbeddablesModelHook implements ModelHookInterface
                     }
 
                     if (EmbeddableCast::configFor($cast)['embeddable'] === $embeddable) {
-                        return [$parent, EmbeddableCast::mapFor($cast, $key, $parent)];
+                        yield [$parent, EmbeddableCast::mapFor($cast, $key, $parent)];
                     }
                 }
             } catch (Throwable) {
                 continue;
             }
         }
-
-        return null;
     }
 
     /**

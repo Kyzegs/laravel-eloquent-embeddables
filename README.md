@@ -213,6 +213,38 @@ Embeddables are plain columns, so query the parent model normally:
 User::where('address_city', 'Rotterdam')->get();
 ```
 
+## IDE support (laravel-ide-helper)
+
+[barryvdh/laravel-ide-helper](https://github.com/barryvdh/laravel-ide-helper) works out of the box: `ide-helper:models` resolves the cast through `EmbeddableCast::get()` and annotates every embeddable as the generic `EmbeddableModel|null`.
+
+For the concrete class and correct nullability, register the shipped model hook in `config/ide-helper.php`:
+
+```php
+'model_hooks' => [
+    \Kyzegs\EloquentEmbeddables\IdeHelper\EmbeddablesModelHook::class,
+],
+```
+
+`ide-helper:models` then generates:
+
+```php
+/**
+ * @property \App\ValueObjects\Address|null $address
+ */
+```
+
+The `|null` is only added when the cast is `nullable`. (The write side also accepts an attribute array or `null`; the generated single-type `@property` favors the concrete class.)
+
+Embeddable classes themselves have no table, so `ide-helper:models` cannot introspect them — annotate them with `@property` docblocks by hand:
+
+```php
+/**
+ * @property string|null $street
+ * @property string|null $city
+ */
+class Address extends EmbeddableModel
+```
+
 ## What is *not* supported
 
 An embeddable is not a full Eloquent model. These throw an `EmbeddableException`:

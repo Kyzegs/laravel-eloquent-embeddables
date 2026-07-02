@@ -137,22 +137,33 @@ class EmbeddableCast implements Castable, CastsAttributes, SerializesCastableAtt
     }
 
     /**
+     * Decode the configuration for an encoded cast definition.
+     *
+     * @return array{embeddable: class-string<EmbeddableModel>, prefix: string|null, attributes: list<string>, columns: array<string, string>, nullable: bool}
+     */
+    public static function configFor(string $cast): array
+    {
+        /** @var array{embeddable: class-string<EmbeddableModel>, prefix: string|null, attributes: list<string>, columns: array<string, string>, nullable: bool} */
+        return static::decode(explode(':', $cast, 2)[1]);
+    }
+
+    /**
      * Resolve the backing parent columns for an encoded cast definition.
      *
      * @return list<string>
      */
     public static function columnsFor(string $cast): array
     {
-        $config = static::decode(explode(':', $cast, 2)[1]);
+        $config = static::configFor($cast);
 
         if (! empty($config['columns'])) {
             return array_values($config['columns']);
         }
 
-        return array_values(array_map(
+        return array_map(
             static fn (string $attribute): string => $config['prefix'].$attribute,
             $config['attributes'],
-        ));
+        );
     }
 
     /**

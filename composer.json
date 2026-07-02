@@ -21,12 +21,16 @@
         "illuminate/support": "^12.0|^13.0"
     },
     "require-dev": {
+        "barryvdh/laravel-ide-helper": "^3.6",
         "larastan/larastan": "^3.10",
         "laravel/pint": "^1.29",
         "orchestra/testbench": "^10.0|^11.0",
         "phpro/grumphp": "^2.22",
         "phpstan/phpstan-phpunit": "^2.0",
         "phpunit/phpunit": "^11.0|^12.0"
+    },
+    "suggest": {
+        "barryvdh/laravel-ide-helper": "Generates accurate @property docblocks for embeddables via the shipped EmbeddablesModelHook."
     },
     "autoload": {
         "psr-4": {

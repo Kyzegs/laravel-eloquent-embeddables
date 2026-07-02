@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Kyzegs\EloquentEmbeddables\Tests;
 
 use Illuminate\Support\Facades\DB;
+use Kyzegs\EloquentEmbeddables\Casts\EmbeddableCast;
 use Kyzegs\EloquentEmbeddables\Tests\Fixtures\Address;
 use Kyzegs\EloquentEmbeddables\Tests\Fixtures\User;
 use Kyzegs\EloquentEmbeddables\Tests\Fixtures\UserWithColumns;
@@ -186,6 +187,25 @@ class EmbeddableCastTest extends TestCase
 
         $this->assertArrayHasKey('address_city', $array);
         $this->assertArrayNotHasKey('address', $array);
+    }
+
+    #[Test]
+    public function it_exposes_the_decoded_cast_config(): void
+    {
+        $cast = EmbeddableCast::using(
+            Address::class,
+            prefix: 'address_',
+            attributes: ['street', 'city'],
+            nullable: true,
+        );
+
+        $config = EmbeddableCast::configFor($cast);
+
+        $this->assertSame(Address::class, $config['embeddable']);
+        $this->assertSame('address_', $config['prefix']);
+        $this->assertSame(['street', 'city'], $config['attributes']);
+        $this->assertSame([], $config['columns']);
+        $this->assertTrue($config['nullable']);
     }
 
     /**

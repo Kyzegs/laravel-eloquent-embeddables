@@ -1,0 +1,55 @@
+{
+    "name": "kyzegs/laravel-eloquent-embeddables",
+    "description": "Doctrine-like embeddables for Eloquent using Laravel's native custom cast system.",
+    "keywords": [
+        "laravel",
+        "eloquent",
+        "embeddable",
+        "value-object",
+        "cast"
+    ],
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Sebastiaan \"Kyzegs\" Zegers"
+        }
+    ],
+    "require": {
+        "php": "^8.2",
+        "illuminate/contracts": "^12.0|^13.0",
+        "illuminate/database": "^12.0|^13.0",
+        "illuminate/support": "^12.0|^13.0"
+    },
+    "require-dev": {
+        "larastan/larastan": "^3.10",
+        "laravel/pint": "^1.29",
+        "orchestra/testbench": "^10.0|^11.0",
+        "phpro/grumphp": "^2.22",
+        "phpstan/phpstan-phpunit": "^2.0",
+        "phpunit/phpunit": "^11.0|^12.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Kyzegs\\EloquentEmbeddables\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Kyzegs\\EloquentEmbeddables\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit",
+        "lint": "pint",
+        "lint:test": "pint --test",
+        "analyse": "phpstan analyse --memory-limit=512M"
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "phpro/grumphp": true
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}

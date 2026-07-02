@@ -1,0 +1,22 @@
+grumphp:
+    hide_circumvention_tip: true
+
+    # The dev toolchain needs PHP >= 8.4, but the PHP first on PATH may be
+    # older. Prefer the current Homebrew PHP for spawned tasks and git hooks.
+    environment:
+        paths:
+            - /opt/homebrew/opt/php/bin
+    git_hook_variables:
+        EXEC_GRUMPHP_COMMAND: /opt/homebrew/opt/php/bin/php
+
+    tasks:
+        shell:
+            metadata:
+                label: pint
+            scripts:
+                - ['-c', './vendor/bin/pint --test']
+        phpstan:
+            configuration: phpstan.neon
+            memory_limit: '512M'
+            use_grumphp_paths: false
+        phpunit: ~
